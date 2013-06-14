@@ -525,7 +525,7 @@ local function geneqop(ast, where)
   local b_idx = cast:append(genexpr(b_ast, where)).idx
   local nstack = (a_idx == -1 and 1 or 0) + (b_idx == -1 and 1 or 0)
   a_idx, b_idx = adjustidxs(a_idx, b_idx)
-  local id = nextid(); cast:append(C.Let(id, C.lua_equal(a_idx, b_idx)))
+  local id = nextid(); cast:append(C.Let(id, C.lua_compare(a_idx, b_idx, C.C"LUA_OPEQ")))
   if nstack ~= 0 then
     cast:append(C.lua_pop(nstack))
   end
@@ -543,7 +543,7 @@ local function genltop(ast, where)
   local nstack = countstack(a_idx, b_idx)
   a_idx, b_idx = adjustidxs(a_idx, b_idx)
 
-  local id = nextid(); cast:append(C.Let(id, C.lua_lessthan(a_idx, b_idx)))
+  local id = nextid(); cast:append(C.Let(id, C.lua_compare(a_idx, b_idx, C.C"LUA_OPLT")))
 
   if nstack ~= 0 then
     cast:append(C.lua_pop(nstack))
@@ -568,7 +568,7 @@ static int lc_le(lua_State * L, int idxa, int idxb) {
   }
   else if (lua_type(L,idxa) == LUA_TSTRING && lua_type(L,idxb) == LUA_TSTRING) {
     /* result similar to lvm.c l_strcmp */
-    return lua_lessthan(L,idxa,idxb) || lua_rawequal(L,idxa,idxb);
+    return lua_compare(L,idxa,idxb,LUA_OPLT) || lua_rawequal(L,idxa,idxb);
   }
   else if (luaL_getmetafield(L,idxa,"__le")||luaL_getmetafield(L,idxb,"__le")) {
     lua_pushvalue(L,idxa < 0 && idxa > LUA_REGISTRYINDEX ? idxa-1 : idxa);
@@ -663,11 +663,10 @@ local function genlenop(ast, where)
 
   --FIX:call metatable __len for userdata?
   local id = nextid()
-  cast:append(C.LetDouble(id, C.lua_objlen(a_idx)))
+  cast:append(C.lua_len(a_idx))
   if a_idx == -1 then
     cast:append(C.lua_pop(1))
   end
-  cast:append(C.lua_pushnumber(C.Id(id)))
   return cast
 end
 
@@ -1225,8 +1224,8 @@ function genexpr(ast, where, nret)
         cast:append(C.lua_pushvalue(idx))
       end
     else -- global
-      --old: cast:append(C.lua_getglobal(name))
-      cast:append(C.lua_getfield(C.C'LUA_ENVIRONINDEX', name))
+      cast:append(C.lua_getglobal(name))
+      -- cast:append(C.lua_getfield(C.C'LUA_ENVIRONINDEX', name))
     end
     return cast
   elseif ast.tag == 'Index' then
@@ -1260,8 +1259,8 @@ local function genlvalueassign(l_ast)
         cast:append(C.lua_replace(idx))
       end
     else  -- global
-      --old:cast:append(C.lua_setglobal(name))
-      cast:append(C.lua_setfield(C.C'LUA_ENVIRONINDEX', name))
+      cast:append(C.lua_setglobal(name))
+      -- cast:append(C.lua_setfield(C.C'LUA_ENVIRONINDEX', name))
     end
   elseif l_ast.tag == 'Index' then
     local t_ast, k_ast = l_ast[1], l_ast[2]
@@ -1969,7 +1968,7 @@ extern "C" {
 static int traceback (lua_State *L) {
   if (!lua_isstring(L, 1))  /* 'message' not a string? */
     return 1;  /* keep it intact */
-  lua_getfield(L, LUA_GLOBALSINDEX, "debug");
+  lua_getglobal(L, "debug");
   if (!lua_istable(L, -1)) {
     lua_pop(L, 1);
     return 1;
@@ -2030,12 +2029,12 @@ static int lc_dostring (lua_State *L, const char *s, const char *name) {
 }
 
 static int lc_handle_luainit (lua_State *L) {
-  const char *init = getenv(LUA_INIT);
+  const char *init = getenv("LUA_INIT");
   if (init == NULL) return 0;  /* status OK */
   else if (init[0] == '@')
     return lc_dofile(L, init+1);
   else
-    return lc_dostring(L, init, "=" LUA_INIT);
+    return lc_dostring(L, init, "=" "LUA_INIT");
 }
 ]])
   end
@@ -2061,11 +2060,11 @@ static void lc_createarg(lua_State * L, const lc_args_t * const args) {
 ]])
 
   cast:append(C.C([[
-static int lc_pmain(lua_State * L) {
+int lc_pmain(lua_State * L) {
   luaL_openlibs(L);
 
   const lc_args_t * const args = (lc_args_t*)lua_touserdata(L, 1);
-  lc_createarg(L, args);
+  // lc_createarg(L, args);
 
   lua_pushcfunction(L, traceback);
 
@@ -2080,10 +2079,10 @@ static int lc_pmain(lua_State * L) {
   lua_newtable(L); /* closure table */
   lua_pushcclosure(L, lcf_main, 1);
   int i;
-  for (i=1; i < args->c; i++) {
-    lua_pushstring(L, args->v[i]);
-  }
-  int status2 = lua_pcall(L, args->c-1, 0, -2);
+  // for (i=1; i < args->c; i++) {
+  //  lua_pushstring(L, args->v[i]);
+  //}
+  int status2 = lua_pcall(L, 0, 0, -2);
   if (status2 != 0) {
     const char * msg = lua_tostring(L,-1);
     if (msg == NULL) msg = "(error object is not a string)";
@@ -2094,12 +2093,16 @@ static int lc_pmain(lua_State * L) {
 ]]))
 
   cast:append(C.C [[
+
 int main(int argc, const char ** argv) {
-  lc_args_t args = {argc, argv};
   lua_State * L = luaL_newstate();
   if (! L) { fputs("Failed creating Lua state.", stderr); exit(1); }
 
-  int status = lua_cpcall(L, lc_pmain, &args);
+  /* call 'pmain' in protected mode */ 
+  lua_pushcfunction(L, &lc_pmain);
+  lua_pushinteger(L, argc);  /* 1st argument */ 
+  lua_pushlightuserdata(L, argv); /* 2nd argument */ 
+  int status = lua_pcall(L, 2, 1, 0);
   if (status != 0) {
     fputs(lua_tostring(L,-1), stderr);
   }
