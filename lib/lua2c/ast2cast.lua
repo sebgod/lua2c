@@ -38,7 +38,7 @@ local unpack       = _G.unpack
 -- converts Metalua AST <ast> built from string
 -- <src> to C AST <cast>.
 -- returns(cast)
-local function ast_to_cast(src, ast)
+local function ast_to_cast(src, ast, mercury, mode, purity)
 --##------------------------------------------------------------------
 --## Note: this is a large function nesting many closures;
 --## indentation of its contents is omitted.
@@ -66,7 +66,10 @@ local _is_created = {}
 local _funcinfo = {is_vararg=false, nformalparams=0,
   is_lc_nextra_used=false, is_lc_nactualargs_used=false,
   is_lc_nextra_used_debug=false, is_lc_nactualargs_used_debug=false,
-  idxtopmax = 0
+  idxtopmax = 0,
+  mercury=mercury or true, -- by default, try to parse to pure mercury
+  mode=mode or "det", -- Mercury determinism mode
+  purity=purity or "pure", -- Mercury functions are promise_pure unless proven otherwise
   --old: outervars={}
 }
 
@@ -151,7 +154,7 @@ local opid_to_c = {
 -- Converts Lua object to Lua AST.
 local function obj_to_ast(obj)
   if obj == nil then
-    return {tag='Nil'}
+    return {tag='Nil',functor={const}
   elseif obj == true then
     return {tag='True'}
   elseif obj == false then
@@ -227,6 +230,15 @@ local function append_cast(cast1, cast2)
 end
 
 
+-- Constructor for Mercury list ast
+local function cons(car, ...)
+  return {term={atom='[|]', car, cons(...)}}
+end
+
+local function car(term)
+  error("TODO")
+end
+
 -- Constructor and type for C AST nodes.
 local cexpr_mt = {}
 cexpr_mt.__index = cexpr_mt
@@ -239,7 +251,8 @@ end
 
 local C_mt = {}
 function C_mt.__index(t,k,v)
-  local f = function(...) return {tag=k, ...} end
+  local f = function(...) return {tag=k, term={atom=string.lower(k), ...}, ...} end 
+  -- term represents
   t.k = f -- cache
   return f
 end
@@ -247,6 +260,10 @@ local C = setmetatable({}, C_mt)
 
 local function tag(o)
   return type(o) == 'table' and o.tag or nil
+end
+
+local function functor(o)
+  return type(o) == 'table' and o.functor or nil
 end
 
 -- returns C AST of double for given C AST idx.
