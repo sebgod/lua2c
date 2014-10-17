@@ -43,7 +43,7 @@ local require      = _G.require
 local string       = _G.string
 local table        = _G.table
 
--- package.path = './lib/?.lua;' .. package.path
+package.path = './lib/?.lua;' .. package.path
 
 -- note: includes gg/mlp Lua parsing Libraries taken from Metalua.
 require "lexer"
